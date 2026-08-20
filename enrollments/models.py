@@ -170,6 +170,22 @@ class PaymentDetail(models.Model):
         return f"Payment for {self.enrollment.name} - {self.payment_paid}"
 
 
+class PaymentTransaction(models.Model):
+    payment_detail = models.ForeignKey(
+        PaymentDetail,
+        on_delete=models.CASCADE,
+        related_name="transactions"
+    )
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    paid_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-paid_at']
+
+    def __str__(self):
+        return f"{self.payment_detail.enrollment.name} paid {self.amount} on {self.paid_at}"
+
+
 @receiver(post_save, sender=Enrollment)
 def handle_enrollment_approval(sender, instance, created, **kwargs):
     if instance.status == 'approved' and (created or getattr(instance, '_original_status', None) != 'approved'):

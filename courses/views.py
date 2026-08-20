@@ -1450,7 +1450,7 @@ class InstructorBatchListView(APIView):
             for batch in batches:
                 data.append({
                     "id": batch.id,
-                    "name": batch.name,
+                    "name": batch.name.name if batch.name else None,
                     "course_id": batch.course.id,
                     "course_title": batch.course.title,
                     "live_link": batch.live_link,
@@ -1489,7 +1489,7 @@ class ManageLiveClassView(APIView):
 
         return Response({
             'id': batch.id,
-            'name': batch.name,
+            'name': batch.name.name if batch.name else None,
             'is_live_class_active': batch.is_live_class_active,
             'live_link': batch.live_link if batch.is_live_class_active else None
         })

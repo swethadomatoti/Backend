@@ -9,6 +9,7 @@ from django.conf import settings
 import random
 import string
 from .permissions import IsAdminOnly
+from accounts.permissions import IsStudent
 from .tasks import (
     send_admin_enrollment_email_sync,
     send_student_approval_email_sync,
@@ -17,7 +18,7 @@ from .tasks import (
 import hmac
 import hashlib
 from django.utils import timezone
-from .models import Enrollment, PaymentDetail
+from .models import Enrollment, PaymentDetail, PaymentTransaction
 from .serializers import EnrollmentSerializer, PaymentDetailSerializer
 from accounts.models import StudentProfile
 
@@ -196,6 +197,7 @@ class RejectEnrollmentView(APIView):
 
 
 class CreateOrderView(APIView):
+    permission_classes = [IsStudent]
 
     def post(self, request):
         amount = request.data.get("amount")  # in rupees
@@ -255,6 +257,7 @@ class CreateOrderView(APIView):
 
 
 class VerifyPaymentView(APIView):
+    permission_classes = [IsStudent]
 
     def post(self, request):
         data = request.data
@@ -301,11 +304,14 @@ class VerifyPaymentView(APIView):
                     # 🔥 Update PaymentDetail
                     payment_detail, _ = PaymentDetail.objects.get_or_create(enrollment=enrollment)
                     if amount_paid:
-                        payment_detail.payment_paid = float(payment_detail.payment_paid) + float(amount_paid)
+                        increment = float(amount_paid)
                     else:
-                        payment_detail.payment_paid = float(payment_detail.fee_amount) if payment_detail.fee_amount else float(enrollment.course.price)
+                        increment = float(payment_detail.fee_amount) if payment_detail.fee_amount else float(enrollment.course.price)
+                    payment_detail.payment_paid = float(payment_detail.payment_paid) + increment
                     payment_detail.save()
-                    
+
+                    PaymentTransaction.objects.create(payment_detail=payment_detail, amount=increment)
+
                     updated += 1
                 except Enrollment.DoesNotExist:
                     continue
@@ -457,38 +463,26 @@ class EnrollmentPaymentDetailView(APIView):
             enrollment = Enrollment.objects.get(id=enrollment_id)
         except Enrollment.DoesNotExist:
             return Response({"error": "Enrollment not found"}, status=status.HTTP_404_NOT_FOUND)
-            
-        payment = PaymentDetail.objects.filter(enrollment=enrollment).first()
-        
-        if payment:
-            # Update existing
-            serializer = PaymentDetailSerializer(payment, data=request.data, partial=True)
-        else:
-            # Create new
-            data = request.data.copy()
-            data['enrollment'] = enrollment.id
-            serializer = PaymentDetailSerializer(data=data)
-            
-        if serializer.is_valid():
-            serializer.save()
-            # Also update the enrollment fee status if needed
-            if 'payment_paid' in request.data:
-                # Basic logic to update fee_status based on payment
-                try:
-                    paid = float(serializer.instance.payment_paid)
-                    fee = float(serializer.instance.fee_amount)
-                    if paid >= fee and fee > 0:
-                        enrollment.fee_status = 'Paid'
-                    elif paid > 0:
-                        enrollment.fee_status = 'Partially Paid'
-                    else:
-                        enrollment.fee_status = 'Pending'
-                    enrollment.save(update_fields=['fee_status'])
-                except (ValueError, TypeError):
-                    pass
-                    
-            return Response(serializer.data, status=status.HTTP_200_OK if payment else status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        # Every call here records a NEW payment on top of whatever has already
+        # been paid, rather than overwriting the total - so the admin only
+        # ever enters the amount being paid right now.
+        try:
+            amount = float(request.data.get('payment_paid'))
+        except (TypeError, ValueError):
+            return Response({"error": "A valid payment amount is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if amount <= 0:
+            return Response({"error": "Payment amount must be greater than zero."}, status=status.HTTP_400_BAD_REQUEST)
+
+        payment, _ = PaymentDetail.objects.get_or_create(enrollment=enrollment)
+        payment.payment_paid = float(payment.payment_paid) + amount
+        payment.save()  # recalculates remaining_balance and enrollment.fee_status
+
+        PaymentTransaction.objects.create(payment_detail=payment, amount=amount)
+
+        serializer = PaymentDetailSerializer(payment)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     def put(self, request, enrollment_id):
         payment = PaymentDetail.objects.filter(enrollment_id=enrollment_id).first()

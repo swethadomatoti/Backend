@@ -119,14 +119,14 @@ class InstructorCoursesView(APIView):
         # 🔥 Get courses via batches assigned to the instructor
         # This ensures newly created batches show up as distinct entries.
         from courses.models import Batch
-        batches = Batch.objects.filter(instructor=instructor, is_active=True).select_related('course')
+        batches = Batch.objects.filter(instructor=instructor, is_active=True).select_related('course', 'name')
 
         data = [
             {
                 "id": batch.id,
                 "title": batch.course.title,
                 "description": getattr(batch.course, "description", ""),
-                "batch_name": batch.name,
+                "batch_name": batch.name.name if batch.name else None,
                 "course_id": batch.course.id,
             }
             for batch in batches

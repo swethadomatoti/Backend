@@ -1,13 +1,21 @@
 from rest_framework import serializers
-from .models import Enrollment, PaymentDetail
+from .models import Enrollment, PaymentDetail, PaymentTransaction
 from courses.models import Course
 
 
 from LeadManagement.models import Lead
 
+class PaymentTransactionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PaymentTransaction
+        fields = ['id', 'amount', 'paid_at']
+        read_only_fields = ['id', 'paid_at']
+
+
 class PaymentDetailSerializer(serializers.ModelSerializer):
     course_name = serializers.CharField(source='enrollment.course.title', read_only=True)
     enrollment_name = serializers.CharField(source='enrollment.name', read_only=True)
+    transactions = PaymentTransactionSerializer(many=True, read_only=True)
     class Meta:
         model = PaymentDetail
         fields = '__all__'
@@ -38,6 +46,13 @@ class EnrollmentSerializer(serializers.ModelSerializer):
     # Or to fetch from related_name='payment_details' (which returns a queryset) we can use a SerializerMethodField
     payment_detail = serializers.SerializerMethodField()
 
+    # Flat convenience fields mirroring payment_detail, since most admin
+    # frontend pages (Transactions/Reports/Refunds) read these top-level
+    # rather than nested under payment_detail.
+    fee_amount = serializers.SerializerMethodField()
+    payment_paid = serializers.SerializerMethodField()
+    remaining_balance = serializers.SerializerMethodField()
+
     # New field to show all courses the student is enrolled in
     all_enrolled_courses = serializers.SerializerMethodField()
 
@@ -66,6 +81,21 @@ class EnrollmentSerializer(serializers.ModelSerializer):
         if payment:
             return PaymentDetailSerializer(payment).data
         return None
+
+    def _course_price(self, obj):
+        return float(obj.course.price) if obj.course and hasattr(obj.course, 'price') else 0.0
+
+    def get_fee_amount(self, obj):
+        payment = obj.payment_details.first()
+        return float(payment.fee_amount) if payment else self._course_price(obj)
+
+    def get_payment_paid(self, obj):
+        payment = obj.payment_details.first()
+        return float(payment.payment_paid) if payment else 0.0
+
+    def get_remaining_balance(self, obj):
+        payment = obj.payment_details.first()
+        return float(payment.remaining_balance) if payment else self._course_price(obj)
 
     def validate(self, data):
         # 1. Lead lookup by email if not provided
